@@ -108,7 +108,7 @@ func TestRunOutputsForJob(t *testing.T) {
 
 	const numRuns = 10
 	for i := 0; i <= numRuns; i++ {
-		r.runJob(job.ID, false)
+		_, _ = r.runJob(job.ID, false)
 	}
 
 	runs, err := r.GetNRunsForJob(job.ID, numRuns)
@@ -133,5 +133,88 @@ func TestRunOutputsForJob(t *testing.T) {
 	if !sort.IntsAreSorted(times) {
 		t.Fatalf("runs not run sequentially")
 	}
+}
 
+// Verify that a Project can be created and it's Pipeline of Jobs can run.
+func TestPipeline(t *testing.T) {
+	db := newMemDB()
+	r := NewRunner(db)
+
+	job1, err := db.NewJob(Job{
+		Cmd: "echo 'hello' > goodbye.txt",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	job2, err := db.NewJob(Job{
+		Cmd: "cat goodbye.txt",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	copyOfjob2, err := db.NewJob(Job{
+		Cmd: "cat goodbye.txt",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	job3, err := db.NewJob(Job{
+		Cmd: "rm goodbye.txt",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	job4, err := db.NewJob(Job{
+		Cmd: "echo 'I should not run'",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	proj, err := db.NewProject(Project{
+		Pipeline: []uint64{job1.ID, job2.ID, job3.ID, copyOfjob2.ID, job4.ID},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := r.runPipe(proj.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	want := []struct {
+		success bool
+		output  string
+	}{
+		{true, ""},
+		{true, "hello\n"},
+		{true, ""},
+		{false, "cat: goodbye.txt: No such file or directory\nexit status 1"},
+	}
+
+	var runs []Run
+	for _, id := range proj.Pipeline {
+		run, err := db.GetNRunsForJob(id, 100)
+		if err != nil {
+			t.Fatal(err)
+		}
+		runs = append(runs, run...)
+	}
+
+	if len(runs) != len(want) {
+		t.Fatalf("pipeline got %d runs; want %d", len(runs), len(want))
+	}
+
+	for i, run := range runs {
+		if run.Success != want[i].success {
+			t.Errorf("pipelined job success=%v; want %v", run.Success, want[i].success)
+		}
+		if run.Output != want[i].output {
+			t.Errorf("pipelined job output=%v; want %v", run.Output, want[i].output)
+		}
+	}
 }

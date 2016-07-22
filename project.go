@@ -4,9 +4,15 @@ import "time"
 
 // A Project represents a software project that has a number of jobs associated with it.
 type Project struct {
-	ID     uint64
-	Name   string
-	JobIDs []uint64
+	ID   uint64
+	Name string
+
+	// The pipeline is a list of jobs that will be run sequentially, stopping if any
+	// of the jobs ends with exit status other than 0.
+	Pipeline []uint64
+
+	// OneOffJobs is for jobs that is not part of the Pipeline, but can be run individually.
+	OneOffJobs []uint64
 }
 
 // A Job is a job that can be executed.

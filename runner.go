@@ -30,7 +30,9 @@ type task struct {
 // NewRunner returns a new Runner, using the given Storer.
 func NewRunner(s Storer) *Runner {
 	return &Runner{
-		Storer: s,
+		Storer:       s,
+		runningJobs:  make(map[uint64]bool),
+		runningProjs: make(map[uint64]bool),
 	}
 }
 
@@ -49,6 +51,7 @@ func (r *Runner) ScheduleProject(id uint64) error {
 }
 
 func (r *Runner) runJob(id uint64, inProjectPipeline bool) (Run, error) {
+	// TODO why return Run struct?
 	defer r.doneJob(id, inProjectPipeline)
 	var run Run
 
@@ -62,7 +65,7 @@ func (r *Runner) runJob(id uint64, inProjectPipeline bool) (Run, error) {
 		return run, errors.Wrap(err, "cannot assign run ID")
 	}
 
-	if err := createAndChdir(job.Workspace); err != nil {
+	if err = createAndChdir(job.Workspace); err != nil {
 		return run, errors.Wrap(err, "failed to create/change workspace")
 	}
 
@@ -99,6 +102,30 @@ func (r *Runner) runJob(id uint64, inProjectPipeline bool) (Run, error) {
 	return run, nil
 }
 
+func (r *Runner) runPipe(id uint64) error {
+	proj, err := r.GetProject(id)
+	if err != nil {
+		return errors.Wrapf(err, "cannot get project %d", id)
+	}
+	defer r.donePipeline(id)
+
+	for _, jobID := range proj.Pipeline {
+		r.mu.Lock()
+		// TODO check if job is running first
+		r.runningJobs[jobID] = true
+		r.mu.Unlock()
+		run, err := r.runJob(jobID, true)
+		if err != nil {
+			return err
+		}
+
+		if !run.Success {
+			break
+		}
+	}
+	return nil
+}
+
 func (r *Runner) doneJob(id uint64, inProjectPipeline bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -119,8 +146,27 @@ func (r *Runner) doneJob(id uint64, inProjectPipeline bool) {
 					}
 				}()
 			} else {
-				//go r.runPipe(task.pipe)
+				go r.runPipe(task.proj)
 			}
+		}
+	}
+}
+
+func (r *Runner) donePipeline(id uint64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	// Mark the Project as not running
+	delete(r.runningProjs, id)
+
+	// If there are enqueued jobs/pipelines  - run it
+	if len(r.scheduled) > 0 {
+		task := r.scheduled[0]
+		r.scheduled = r.scheduled[1:]
+		if task.job != 0 {
+			go r.runJob(task.job, false)
+		} else {
+			go r.runPipe(task.proj)
 		}
 	}
 }
